@@ -1,0 +1,141 @@
+// SPDX-FileCopyrightText: 2024 Ledger SAS
+// SPDX-License-Identifier: Apache-2.0
+
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+#include <assert.h>
+#include <lcd/lcd.h>
+
+#include "stm32_ltdc_priv.h"
+
+{% set ns = namespace() -%}
+{% set ns.total_devices=0 -%}
+
+static stm32_ltdc_device_t __stm32_ltdc_devices[] = {
+    {% set ns.total_devices=0 -%}
+    {% for device in dts.get_active_nodes() -%}
+    {% if device is not owned or device is not enabled -%}
+    {% continue -%}
+    {% endif -%}
+    {% if device is not owned_by(env.CONFIG_TASK_LABEL|int(base=16)) -%}
+    {% continue -%}
+    {% endif -%}
+    {% if "LTDC" in "%s"|format(device.label.upper()) -%}
+    {% set ns.total_devices = ns.total_devices + 1 -%}
+    {
+        .dev = {
+            .id = {{ "0x%xUL"|format(loop.index - 1) }},
+            {% if device.reg -%}
+            .baseaddr = {{ "0x%08x"|format(device.reg[0]) }},
+            .size = {{ "0x%08x"|format(device.reg[1]) }},
+            {% else -%}
+            .baseaddr = 0UL,
+            .size = 0UL,
+            {% endif -%}
+            {% if device.interrupts -%}
+            .num_interrupt = 1,
+            .its = {
+                {% if device.interrupts[0] -%}
+                {  .it_controler = {{ device.interrupts[1] }}UL, .it_num = {{ device.interrupts[0] }}UL },
+                {% else -%}
+                {  .it_controler = 0UL, .it_num = 0UL },
+                {% endif -%}
+                {% for irq in [ 1,2,3,4,5,6,7] -%}
+                {  .it_controler = 0UL, .it_num = 0UL },
+                {% endfor -%}
+            },
+            {% else -%}
+            .num_interrupt = 0,
+            .its = {
+                {% for irq in [ 0,1,2,3,4,5,6,7] -%}
+                {  .it_controler = 0UL, .it_num = 0UL },
+                {% endfor -%}
+            },
+            {% endif -%}
+            {% if device['pinctrl-0'] -%}
+            {% set numio = device['pinctrl-0']|length %}
+            .num_ios = {{ numio }},
+            .ios = {
+                {% for io in [ 0,1,2,3,4,5,6,7] -%}
+                {% if io < numio -%}
+                {% set io = device['pinctrl-0'][io] -%}
+                {
+                    {#
+                    the GPIO port id is numeric here, using the same resolution
+                    as the GPIO driver device tree forge (see stm32-gpio-dt.h for e.g.
+                    -#}
+                    {% set ns.io_gpio_port=0 -%}
+                    {% set gpio_ports = dts.get_compatible("st,stm32-gpio") -%}
+                    {% for port in gpio_ports -%}
+                    {% if port.status and port.status == "okay" -%}
+                    {% if port.label == io.pinmux[0].label -%}
+                    /* using port {{ port.label.upper() }} */
+                    .port = {{ ns.io_gpio_port }},
+                    {% endif -%}
+                    {% set ns.io_gpio_port = ns.io_gpio_port + 1 -%}
+                    {% endif -%}
+                    {% endfor -%} .pin = {{ io.pinmux[1] }}, .mode = {{ io.pinmux[2] }}, .af = {{ io.pinmux[3] }}, .ppull =  {{ io.pincfg[0] }}, .speed =  {{ io.pincfg[1] }}, .pupdr =  {{ io.pincfg[2] }}, },
+                {% else -%}
+                { .port = 0, .pin = 0, .mode = 0, .af = 0, .ppull = 0, .speed = 0, .pupdr = 0, },
+                {% endif -%}
+                {% endfor -%}
+            },
+            {% else -%}
+            .num_ios = 0,
+            .ios = {
+                {% for io in [0,1,2,3,4,5,6,7] -%}
+                { .port = 0, .pin = 0, .mode = 0, .af = 0, .ppull = 0, .speed = 0, .pupdr = 0, },
+                {% endfor -%}
+            },
+            {% endif -%}
+        },
+        /* TODO get from DTS */
+        .videomode = {
+            .pixelclock = 32000, /* 60FPS <==> 32.970MHz round to 33MHz */
+            .hactive = 480,
+            .hback_porch = 80,
+            .hfront_porch = 80,
+            .hsync_len = 8,
+            .vactive = 800,
+            .vback_porch = 20,
+            .vfront_porch = 20,
+            .vsync_len = 8,
+        },
+        .mapped = ATOMIC_VAR_INIT(false),
+        .probed = ATOMIC_VAR_INIT(false),
+    },
+    {% endif -%}
+    {% endfor %}
+};
+
+#define DEVICE_LIST_SIZE {{ "%uUL"|format(ns.total_devices) }}
+
+static_assert(DEVICE_LIST_SIZE > 0, "At least one LTDC must be enabled in DTS file");
+
+stm32_ltdc_device_t *stm32_ltdc_get_device(const uint8_t id)
+{
+    stm32_ltdc_device_t *dev = NULL;
+
+    if (likely(id < ARRAY_SIZE(__stm32_ltdc_devices))) {
+        dev = &__stm32_ltdc_devices[id];
+    }
+
+    return dev;
+}

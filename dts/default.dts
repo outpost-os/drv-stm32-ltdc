@@ -1,0 +1,14 @@
+/*
+ * Copyright (c) 2023,Ledger SAS
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/dts-v1/;
+
+#include <st/u5/stm32u599.dtsi>
+
+&ltdc0 {
+	outpost,owner = <0xC001F002>;
+	status = "okay";
+};
